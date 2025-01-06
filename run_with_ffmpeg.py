@@ -1,0 +1,130 @@
+import cv2
+import numpy as np
+from rknn.api import RKNN
+import subprocess
+
+# 配置路径
+MODEL_PATH = '../data/best.rknn'  # RKNN 模型路径
+INPUT_SIZE = (640, 640)            # YOLOv8 模型输入尺寸
+CONF_THRESHOLD = 0.6              # 置信度阈值
+OUTPUT_VIDEO_PATH = './detection_result'  # 输出视频路径
+
+# 1. 图片预处理
+def preprocess_image(image, input_size):
+    # 调整为模型输入尺寸
+    image_resized = cv2.resize(image, input_size)
+
+    # 数据格式调整为 NHWC
+    image_data = np.expand_dims(image_resized, axis=0)
+
+    return image_data.astype(np.float32)
+
+# 2. Sigmoid 归一化函数
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
+
+# 3. 推理后处理
+def postprocess(outputs, conf_threshold, original_width, original_height, input_size):
+    results = []
+    detections = outputs
+    for detection in detections:
+        x_center, y_center, width, height, confidence, class1, class2 = detection
+        # 对置信度进行Sigmoid归一化
+        confidence = sigmoid(confidence)
+        if confidence > conf_threshold:
+            # 将中心点和宽高从输入尺寸映射到原始尺寸
+            x1 = int((x_center - width / 2) * original_width / input_size[0])
+            y1 = int((y_center - height / 2) * original_height / input_size[1])
+            x2 = int((x_center + width / 2) * original_width / input_size[0])
+            y2 = int((y_center + height / 2) * original_height / input_size[1])
+            results.append({
+                "class_id": int(class1),  # 假设class1是类别ID
+                "score": float(confidence),
+                "bbox": [x1, y1, x2, y2]
+            })
+    return results
+
+# 4. 绘制边界框并保存图片
+def draw_boxes(image, results):
+    for result in results:
+        class_id = result['class_id']
+        score = result['score']
+        bbox = result['bbox']
+        # 绘制边界框
+        cv2.rectangle(image, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
+        # 绘制类别ID和分数
+        cv2.putText(image, f"Class {class_id} {score:.2f}", (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+def main():
+    # 初始化 RKNN 对象
+    rknn = RKNN()
+
+    # 加载 RKNN 模型
+    print('Loading RKNN model...')
+    if rknn.load_rknn(MODEL_PATH) != 0:
+        print('Load RKNN model failed!')
+        return
+
+    # 初始化运行时环境
+    print('Initializing runtime environment...')
+    if rknn.init_runtime(target='rk3588') != 0:
+        print('Init runtime environment failed!')
+        return
+
+    # 打开摄像头
+    cap = cv2.VideoCapture(74)
+    if not cap.isOpened():
+        print("Error: Could not open video capture device.")
+        return
+
+    # 打开ffmpeg进程用于视频输出
+    #ffmpeg -f v4l2 -i /dev/video74 -c:v libx264 output.mp4
+    command = f"ffmpeg -f rawvideo -pix_fmt bgr24 -s {INPUT_SIZE[0]}x{INPUT_SIZE[1]} -i - -c:v libx264 -pix_fmt yuv420p -preset ultrafast -f hls -hls_time 10 -hls_list_size 0 -hls_flags delete_segments {OUTPUT_VIDEO_PATH}.m3u8"
+    process = subprocess.Popen(command, shell=True, stdin=subprocess.PIPE)
+
+    while True:
+        try:
+            ret, frame = cap.read()
+            if not ret:
+                print("Failed to grab frame from camera.")
+                continue  # 如果读取失败，跳过当前循环
+
+            # 图片预处理
+            image_data = preprocess_image(frame, INPUT_SIZE)
+            print('Image data shape:', image_data.shape)
+
+            # 推理
+            outputs = rknn.inference(inputs=[image_data])
+            if isinstance(outputs, list):
+                outputs = np.array(outputs)
+            # 将输出转换成[8400,7]
+            outputs = outputs[0][0].T
+
+            # 后处理
+            results = postprocess(outputs, CONF_THRESHOLD, 640, 640, INPUT_SIZE)
+
+            # 绘制边界框
+            draw_boxes(frame, results)
+
+            # 将处理后的帧发送到ffmpeg进程
+            process.stdin.write(frame.tobytes())
+
+            # 显示结果
+            #cv2.imshow('Detection', frame)
+            #if cv2.waitKey(1) & 0xFF == ord('q'):
+            #   break
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            break  # 如果发生异常，跳出循环
+
+    # 释放资源
+    print('Releasing RKNN resources...')
+    rknn.release()
+    cap.release()
+    process.stdin.close()
+    process.wait()
+    cv2.destroyAllWindows()
+
+# 执行主函数
+if __name__ == '__main__':
+    main()
