@@ -5,6 +5,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue
 import threading
+import time
 
 # 配置路径
 MODEL_PATH = '../data/best.rknn'  # RKNN 模型路径
@@ -99,9 +100,16 @@ def main():
     with ThreadPoolExecutor(max_workers=2) as executor:
         frame_count = 0
         running = True
+        
+        # 初始化时间计数器
+        process_times = []
+        start_time = time.time()
 
         while running:
             try:
+                # 开始计时
+                frame_start = time.time()
+                
                 ret, frame = cap.read()
                 if not ret:
                     print("Failed to grab frame from camera.")
@@ -126,20 +134,43 @@ def main():
                 detection_result = DetectionResult(frame.copy(), frame_count)
                 executor.submit(save_frame, output_dir, detection_result)
 
+                # 计算这一帧的处理时间
+                frame_time = time.time() - frame_start
+                process_times.append(frame_time)
+                
+                # 计算实时FPS
+                current_fps = 1.0 / frame_time
+                
+                # 每10帧显示一次FPS
+                if frame_count % 10 == 0:
+                    avg_fps = 1.0 / (sum(process_times[-10:]) / len(process_times[-10:]))
+                    print(f"Current FPS: {current_fps:.2f}, Average FPS (last 10 frames): {avg_fps:.2f}")
+
                 frame_count += 1
-                print(f"Processed frame {frame_count}")
 
                 # 可选：限制帧数
                 if frame_count >= 100:  # 比如只保存100帧
-                    running = False
                     break
 
             except Exception as e:
                 print(f"An error occurred: {e}")
                 break
 
+        # 计算总体统计信息
+        total_time = time.time() - start_time
+        avg_frame_time = sum(process_times) / len(process_times)
+        avg_fps = 1.0 / avg_frame_time
+        
+        print("\n=== Performance Statistics ===")
+        print(f"Total frames processed: {frame_count}")
+        print(f"Total time: {total_time:.2f} seconds")
+        print(f"Average processing time per frame: {avg_frame_time*1000:.2f} ms")
+        print(f"Average FPS: {avg_fps:.2f}")
+        print(f"Min FPS: {1.0/max(process_times):.2f}")
+        print(f"Max FPS: {1.0/min(process_times):.2f}")
+
         # 释放资源
-        print('Releasing resources...')
+        print('\nReleasing resources...')
         rknn.release()
         cap.release()
 
