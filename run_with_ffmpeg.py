@@ -126,10 +126,19 @@ def main():
 
                 # 后处理
                 results = postprocess(outputs, CONF_THRESHOLD, 640, 640, INPUT_SIZE)
+                
+                # 应用非极大值抑制
+                indices = nms([r['bbox'] for r in results], [r['score'] for r in results], nms_threshold)
+                results = [results[i] for i in indices]
+                print('Detection results:')
+                for result in results:
+                    print(f"Class ID: {result['class_id']}, Score: {result['score']}, BBox: {result['bbox']}")
 
-                # 绘制边界框
-                draw_boxes(frame, results)
-
+                # 绘制边界框并保存图片
+                if results:
+                    print('Drawing bounding boxes and saving image...')
+                    draw_boxes(frame, results)
+                    
                 # 创建结果对象并提交保存任务
                 detection_result = DetectionResult(frame.copy(), frame_count)
                 executor.submit(save_frame, output_dir, detection_result)
