@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 from rknn.api import RKNN
 import subprocess
+import os
 
 # 配置路径
 MODEL_PATH = '../data/best.rknn'  # RKNN 模型路径
@@ -56,6 +57,12 @@ def draw_boxes(image, results):
         cv2.putText(image, f"Class {class_id} {score:.2f}", (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
 def main():
+    # 创建保存结果的目录
+    output_dir = 'detection_results'
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f'Created output directory: {output_dir}')
+
     # 初始化 RKNN 对象
     rknn = RKNN()
 
@@ -77,6 +84,7 @@ def main():
         print("Error: Could not open video capture device.")
         return
 
+    frame_count = 0
     while True:
         try:
             ret, frame = cap.read()
@@ -100,9 +108,14 @@ def main():
             # 绘制边界框
             draw_boxes(frame, results)
 
-            # 显示结果
-            cv2.imshow('Detection', frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            # 保存结果图片到指定目录
+            output_path = os.path.join(output_dir, f'detection_{frame_count:04d}.jpg')
+            cv2.imwrite(output_path, frame)
+            print(f'Saved frame to {output_path}')
+            frame_count += 1
+
+            # 按帧数限制保存数量（可选）
+            if frame_count >= 100:  # 比如只保存100帧
                 break
 
         except Exception as e:
@@ -113,7 +126,6 @@ def main():
     print('Releasing RKNN resources...')
     rknn.release()
     cap.release()
-    cv2.destroyAllWindows()
 
 # 执行主函数
 if __name__ == '__main__':
