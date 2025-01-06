@@ -12,7 +12,7 @@ MODEL_PATH = '../data/best.rknn'  # RKNN 模型路径
 INPUT_SIZE = (640, 640)            # YOLOv8 模型输入尺寸
 CONF_THRESHOLD = 0.6              # 置信度阈值
 OUTPUT_VIDEO_PATH = './detection_result'  # 输出视频路径
-
+nms_threshold = 0.4
 # 1. 图片预处理
 def preprocess_image(image, input_size):
     # 调整为模型输入尺寸
