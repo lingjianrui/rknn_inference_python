@@ -70,11 +70,6 @@ def save_frame(output_dir, result):
     cv2.imwrite(output_path, result.frame)
     print(f'Saved frame to {output_path}')
 
-def display_frame(result, display_queue):
-    """显示帧的线程函数"""
-    cv2.imshow('Detection Result', result.frame)
-    display_queue.put(True)  # 通知主线程已显示
-
 def main():
     # 创建保存结果的目录
     output_dir = 'detection_results'
