@@ -77,17 +77,12 @@ def main():
         print("Error: Could not open video capture device.")
         return
 
-    # 打开ffmpeg进程用于视频输出
-    #ffmpeg -f v4l2 -i /dev/video74 -c:v libx264 output.mp4
-    command = f"ffmpeg -f rawvideo -pix_fmt bgr24 -s {INPUT_SIZE[0]}x{INPUT_SIZE[1]} -i - -c:v libx264 -pix_fmt yuv420p -preset ultrafast -f hls -hls_time 10 -hls_list_size 0 -hls_flags delete_segments {OUTPUT_VIDEO_PATH}.m3u8"
-    process = subprocess.Popen(command, shell=True, stdin=subprocess.PIPE)
-
     while True:
         try:
             ret, frame = cap.read()
             if not ret:
                 print("Failed to grab frame from camera.")
-                continue  # 如果读取失败，跳过当前循环
+                continue
 
             # 图片预处理
             image_data = preprocess_image(frame, INPUT_SIZE)
@@ -97,7 +92,6 @@ def main():
             outputs = rknn.inference(inputs=[image_data])
             if isinstance(outputs, list):
                 outputs = np.array(outputs)
-            # 将输出转换成[8400,7]
             outputs = outputs[0][0].T
 
             # 后处理
@@ -106,23 +100,19 @@ def main():
             # 绘制边界框
             draw_boxes(frame, results)
 
-            # 将处理后的帧发送到ffmpeg进程
-            process.stdin.write(frame.tobytes())
-
             # 显示结果
-            #cv2.imshow('Detection', frame)
-            #if cv2.waitKey(1) & 0xFF == ord('q'):
-            #   break
+            cv2.imshow('Detection', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
         except Exception as e:
             print(f"An error occurred: {e}")
-            break  # 如果发生异常，跳出循环
+            break
 
     # 释放资源
     print('Releasing RKNN resources...')
     rknn.release()
     cap.release()
-    process.stdin.close()
-    process.wait()
     cv2.destroyAllWindows()
 
 # 执行主函数
