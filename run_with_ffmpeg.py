@@ -82,26 +82,17 @@ def main():
         os.makedirs(output_dir)
         print(f'Created output directory: {output_dir}')
 
-    # 初始化显示窗口
-    cv2.namedWindow('Detection Result', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('Detection Result', 1280, 720)
+    # 初始化 RKNN
+    rknn = RKNN()
+    print('Loading RKNN model...')
+    if rknn.load_rknn(MODEL_PATH) != 0:
+        print('Load RKNN model failed!')
+        return
 
-    # 创建线程池
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        # 创建一个队列用于显示同步
-        display_queue = Queue()
-
-        # 初始化 RKNN
-        rknn = RKNN()
-        print('Loading RKNN model...')
-        if rknn.load_rknn(MODEL_PATH) != 0:
-            print('Load RKNN model failed!')
-            return
-
-        print('Initializing runtime environment...')
-        if rknn.init_runtime(target='rk3588') != 0:
-            print('Init runtime environment failed!')
-            return
+    print('Initializing runtime environment...')
+    if rknn.init_runtime(target='rk3588') != 0:
+        print('Init runtime environment failed!')
+        return
 
     # 打开摄像头
     cap = cv2.VideoCapture(74)
@@ -109,60 +100,53 @@ def main():
         print("Error: Could not open video capture device.")
         return
 
-    frame_count = 0
-    running = True
+    # 创建线程池
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        frame_count = 0
+        running = True
 
-    while running:
-        try:
-            ret, frame = cap.read()
-            if not ret:
-                print("Failed to grab frame from camera.")
-                continue
+        while running:
+            try:
+                ret, frame = cap.read()
+                if not ret:
+                    print("Failed to grab frame from camera.")
+                    continue
 
-            # 图片预处理
-            image_data = preprocess_image(frame, INPUT_SIZE)
+                # 图片预处理
+                image_data = preprocess_image(frame, INPUT_SIZE)
 
-            # 推理
-            outputs = rknn.inference(inputs=[image_data])
-            if isinstance(outputs, list):
-                outputs = np.array(outputs)
-            outputs = outputs[0][0].T
+                # 推理
+                outputs = rknn.inference(inputs=[image_data])
+                if isinstance(outputs, list):
+                    outputs = np.array(outputs)
+                outputs = outputs[0][0].T
 
-            # 后处理
-            results = postprocess(outputs, CONF_THRESHOLD, 640, 640, INPUT_SIZE)
+                # 后处理
+                results = postprocess(outputs, CONF_THRESHOLD, 640, 640, INPUT_SIZE)
 
-            # 绘制边界框
-            draw_boxes(frame, results)
+                # 绘制边界框
+                draw_boxes(frame, results)
 
-            # 显示结果
-            cv2.imshow('Detection Result', frame)
+                # 创建结果对象并提交保存任务
+                detection_result = DetectionResult(frame.copy(), frame_count)
+                executor.submit(save_frame, output_dir, detection_result)
 
-            # 保存结果图片到指定目录
-            output_path = os.path.join(output_dir, f'detection_{frame_count:04d}.jpg')
-            cv2.imwrite(output_path, frame)
-            print(f'Saved frame to {output_path}')
-            frame_count += 1
+                frame_count += 1
+                print(f"Processed frame {frame_count}")
 
-            # 检测按键，按 'q' 退出
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                running = False
+                # 可选：限制帧数
+                if frame_count >= 100:  # 比如只保存100帧
+                    running = False
+                    break
+
+            except Exception as e:
+                print(f"An error occurred: {e}")
                 break
 
-            # 按帧数限制保存数量（可选）
-            if frame_count >= 100:  # 比如只保存100帧
-                running = False
-                break
-
-        except Exception as e:
-            print(f"An error occurred: {e}")
-            running = False
-            break
-
-    # 释放资源
-    print('Releasing resources...')
-    rknn.release()
-    cap.release()
-    cv2.destroyAllWindows()
+        # 释放资源
+        print('Releasing resources...')
+        rknn.release()
+        cap.release()
 
 if __name__ == '__main__':
     main()
