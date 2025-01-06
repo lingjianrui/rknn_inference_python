@@ -1,8 +1,10 @@
 import cv2
 import numpy as np
 from rknn.api import RKNN
-import subprocess
 import os
+from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
+import threading
 
 # 配置路径
 MODEL_PATH = '../data/best.rknn'  # RKNN 模型路径
@@ -56,6 +58,23 @@ def draw_boxes(image, results):
         # 绘制类别ID和分数
         cv2.putText(image, f"Class {class_id} {score:.2f}", (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
+# 添加一个结果对象类来传递数据
+class DetectionResult:
+    def __init__(self, frame, frame_count):
+        self.frame = frame
+        self.frame_count = frame_count
+
+def save_frame(output_dir, result):
+    """保存帧的线程函数"""
+    output_path = os.path.join(output_dir, f'detection_{result.frame_count:04d}.jpg')
+    cv2.imwrite(output_path, result.frame)
+    print(f'Saved frame to {output_path}')
+
+def display_frame(result, display_queue):
+    """显示帧的线程函数"""
+    cv2.imshow('Detection Result', result.frame)
+    display_queue.put(True)  # 通知主线程已显示
+
 def main():
     # 创建保存结果的目录
     output_dir = 'detection_results'
@@ -63,70 +82,92 @@ def main():
         os.makedirs(output_dir)
         print(f'Created output directory: {output_dir}')
 
-    # 初始化 RKNN 对象
-    rknn = RKNN()
+    # 初始化显示窗口
+    cv2.namedWindow('Detection Result', cv2.WINDOW_NORMAL)
+    cv2.resizeWindow('Detection Result', 1280, 720)
 
-    # 加载 RKNN 模型
-    print('Loading RKNN model...')
-    if rknn.load_rknn(MODEL_PATH) != 0:
-        print('Load RKNN model failed!')
-        return
+    # 创建线程池
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        # 创建一个队列用于显示同步
+        display_queue = Queue()
 
-    # 初始化运行时环境
-    print('Initializing runtime environment...')
-    if rknn.init_runtime(target='rk3588') != 0:
-        print('Init runtime environment failed!')
-        return
+        # 初始化 RKNN
+        rknn = RKNN()
+        print('Loading RKNN model...')
+        if rknn.load_rknn(MODEL_PATH) != 0:
+            print('Load RKNN model failed!')
+            return
 
-    # 打开摄像头
-    cap = cv2.VideoCapture(74)
-    if not cap.isOpened():
-        print("Error: Could not open video capture device.")
-        return
+        print('Initializing runtime environment...')
+        if rknn.init_runtime(target='rk3588') != 0:
+            print('Init runtime environment failed!')
+            return
 
-    frame_count = 0
-    while True:
-        try:
-            ret, frame = cap.read()
-            if not ret:
-                print("Failed to grab frame from camera.")
-                continue
+        # 打开摄像头
+        cap = cv2.VideoCapture(74)
+        if not cap.isOpened():
+            print("Error: Could not open video capture device.")
+            return
 
-            # 图片预处理
-            image_data = preprocess_image(frame, INPUT_SIZE)
-            print('Image data shape:', image_data.shape)
+        frame_count = 0
+        running = True
 
-            # 推理
-            outputs = rknn.inference(inputs=[image_data])
-            if isinstance(outputs, list):
-                outputs = np.array(outputs)
-            outputs = outputs[0][0].T
+        while running:
+            try:
+                ret, frame = cap.read()
+                if not ret:
+                    print("Failed to grab frame from camera.")
+                    continue
 
-            # 后处理
-            results = postprocess(outputs, CONF_THRESHOLD, 640, 640, INPUT_SIZE)
+                # 图片预处理
+                image_data = preprocess_image(frame, INPUT_SIZE)
 
-            # 绘制边界框
-            draw_boxes(frame, results)
+                # 推理
+                outputs = rknn.inference(inputs=[image_data])
+                if isinstance(outputs, list):
+                    outputs = np.array(outputs)
+                outputs = outputs[0][0].T
 
-            # 保存结果图片到指定目录
-            output_path = os.path.join(output_dir, f'detection_{frame_count:04d}.jpg')
-            cv2.imwrite(output_path, frame)
-            print(f'Saved frame to {output_path}')
-            frame_count += 1
+                # 后处理
+                results = postprocess(outputs, CONF_THRESHOLD, 640, 640, INPUT_SIZE)
 
-            # 按帧数限制保存数量（可选）
-            if frame_count >= 100:  # 比如只保存100帧
+                # 绘制边界框
+                draw_boxes(frame, results)
+
+                # 创建结果对象
+                detection_result = DetectionResult(frame.copy(), frame_count)
+
+                # 提交保存任务
+                executor.submit(save_frame, output_dir, detection_result)
+                
+                # 提交显示任务
+                executor.submit(display_frame, detection_result, display_queue)
+
+                # 等待显示完成
+                display_queue.get()
+
+                # 检查键盘输入
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    running = False
+                    break
+
+                frame_count += 1
+
+                # 可选：限制帧数
+                if frame_count >= 100:
+                    running = False
+                    break
+
+            except Exception as e:
+                print(f"An error occurred: {e}")
+                running = False
                 break
 
-        except Exception as e:
-            print(f"An error occurred: {e}")
-            break
+        # 释放资源
+        print('Releasing resources...')
+        rknn.release()
+        cap.release()
+        cv2.destroyAllWindows()
 
-    # 释放资源
-    print('Releasing RKNN resources...')
-    rknn.release()
-    cap.release()
-
-# 执行主函数
 if __name__ == '__main__':
     main()
