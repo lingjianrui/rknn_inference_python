@@ -152,9 +152,11 @@ def main():
                 if isinstance(outputs, list):
                     outputs = np.array(outputs)
                 outputs = outputs[0][0].T
-
+                
+                # 获取图片的原始尺寸
+                ORIGINAL_HEIGHT, ORIGINAL_WIDTH = frame.shape[:2]
                 # 后处理
-                results = postprocess(outputs, CONF_THRESHOLD, 640, 640, INPUT_SIZE)
+                results = postprocess(outputs, CONF_THRESHOLD, ORIGINAL_WIDTH, ORIGINAL_HEIGHT, INPUT_SIZE)
                 
                 # 应用非极大值抑制
                 indices = nms([r['bbox'] for r in results], [r['score'] for r in results], nms_threshold)
